@@ -10,9 +10,15 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # убирает предупреждение Node.js 20
       PROJECT_NAME: ${{ github.event.repository.name }}  # имя репозитория
     steps:
+   
+      - name: Git config (long paths + symlinks)
+        shell: bash
+        run: |
+          git config --global core.longpaths true
+          git config --global core.symlinks false
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
