@@ -175,7 +175,7 @@ jobs:
 
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --icon=icon.ico --version-file=version_info.txt --name ${{ env.PROJECT_NAME }} ${{ env.MAIN_SCRIPT }}
+          pyinstaller --onefile --windowed --icon=icon.ico --add-data "icon.ico;." --version-file=version_info.txt --name ${{ env.PROJECT_NAME }} ${{ env.MAIN_SCRIPT }}
 
       # Релиз при пуше тега
       - name: Upload EXE to release (tag push)
