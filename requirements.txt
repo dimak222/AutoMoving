@@ -1,19 +1,8 @@
-import threading
-import random
-import time
-import sys
-import os
-import ctypes
-import pyautogui
-from PIL import Image
-import pystray
-from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox
-from PyQt6.QtCore import QObject, pyqtSignal, Qt, QSettings, QTimer
-from PyQt6.QtGui import QIcon
-
-import win32com.client
-import win32event
-import win32api
-import winerror
-
-from updater import start_update_check
+pyautogui
+pystray
+pillow
+PyQt6
+pywin32
+requests
+packaging
+send2trash
