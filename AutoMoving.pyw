@@ -7,7 +7,7 @@
 #-------------------------------------------------------------------------------
 
 title = "AutoMoving"
-ver = "v26.06.1"
+ver = "v26.07.0"
 
 #------------------------------Импорт модулей-----------------------------------
 
@@ -17,7 +17,8 @@ import time
 import sys
 import os
 import ctypes
-import pyautogui
+from pynput.mouse import Controller as MouseController
+from pynput.keyboard import Key, Controller as KeyboardController
 from PIL import Image
 import pystray
 from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox
@@ -69,6 +70,9 @@ if not settings.contains("interval"): # интервал обновления
 if not settings.contains("visual_move"):
     settings.setValue("visual_move", False)        # по умолчанию визуальный сдвиг выключен (с возвратом)
 
+if not settings.contains("keyboard_simulation"):
+    settings.setValue("keyboard_simulation", False) # по умолчанию имитация клавишей выключена
+
 if not settings.contains("prevent_sleep"):
     settings.setValue("prevent_sleep", True)       # по умолчанию предотвращаем сон
 
@@ -82,17 +86,28 @@ if not settings.contains("auto_startup"):
 running = True
 dialog_manager = None
 icon = None
-# Событие для управления потоком движения: установлено – перемещение активно, сброшено – поток спит
-move_event = threading.Event()
-# Инициализируем состояние события в соответствии с сохранённой настройкой
-if settings.value("move_enabled", type=bool):
-    move_event.set()
-else:
-    move_event.clear()
+
+# Контроллеры pynput
+mouse = MouseController()
+keyboard = KeyboardController()
 
 # Для обновления
 pending_update = False
 new_executable = None
+
+# ---------- Определение времени последнего ввода пользователя ----------
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint),
+                ("dwTime", ctypes.c_uint)]
+
+def get_idle_time():
+    """Возвращает время бездействия пользователя в секундах (мышь и клавиатура)."""
+    lii = LASTINPUTINFO()
+    lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+    if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+        millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+        return millis / 1000.0
+    return 0
 
 # ---------- Проверка блокировки рабочего стола ----------
 def is_workstation_locked():
@@ -107,7 +122,7 @@ def is_workstation_locked():
     return False
 
 # ---------- Предотвращение сна / выключения экрана ----------
-def set_sleep_state(prevent: bool):
+def set_sleep_state(prevent: bool): # запрещаем/разрешаем системе переходить в спящий режим
     """
     Если prevent == True, запрещаем системе переходить в спящий режим
     и выключать дисплей. Иначе сбрасываем флаг.
@@ -121,26 +136,6 @@ def set_sleep_state(prevent: bool):
         )
     else:
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
-
-def manage_sleep_state():
-    """
-    Управляет состоянием предотвращения сна в зависимости от глобальной настройки
-    и текущего состояния блокировки рабочего стола.
-    Если опция включена, но компьютер заблокирован – сон разрешается.
-    При разблокировке – снова запрещается.
-    """
-    locked = is_workstation_locked()
-    prevent = settings.value("prevent_sleep", type=bool)
-    set_sleep_state(prevent and not locked)
-
-def toggle_prevent_sleep():
-    """Переключает настройку предотвращения сна. Фактическое применение происходит в потоке движения."""
-    current = settings.value("prevent_sleep", type=bool)
-    settings.setValue("prevent_sleep", not current)
-    # Немедленное применение не требуется, поток движения подхватит изменение за секунду.
-    # Но для мгновенной реакции можно вызвать manage_sleep_state() здесь,
-    # однако это может привести к двойному вызову из разных потоков, что не страшно.
-    manage_sleep_state()
 
 # ---------- Работа с автозагрузкой ----------
 def get_startup_shortcut_path():
@@ -178,14 +173,6 @@ def sync_startup_shortcut():
             os.remove(shortcut_path)
         except OSError:
             pass
-    # Если не .exe и настройка включена — ярлык не создаётся (пользователь увидит,
-    # что галочка есть, но ярлыка нет; можно добавить уведомление, но оставим так)
-
-def toggle_startup():
-    """Переключает настройку автозагрузки и синхронизирует ярлык."""
-    current = settings.value("auto_startup", type=bool)
-    settings.setValue("auto_startup", not current)
-    sync_startup_shortcut()
 
 # ---------- Qt-прослойка с сигналом завершения ----------
 class IntervalDialog(QObject):
@@ -214,7 +201,36 @@ class IntervalDialog(QObject):
             self.seconds = None
         self.done = True
 
-# ---------- Установка интервала ----------
+# ---------- Универсальная функция переключения булевых настроек ----------
+def toggle_setting(key):
+    """Инвертирует булеву настройку."""
+    current = settings.value(key, type=bool)
+    settings.setValue(key, not current)
+    return not current          # возвращаем новое значение
+
+# ---------- Отдельные функции для меню ----------
+def toggle_move_enabled():
+    toggle_setting("move_enabled")
+
+def toggle_auto_update():
+    toggle_setting("auto_update_check")
+
+def toggle_visual_move():
+    toggle_setting("visual_move")
+
+def toggle_keyboard_simulation():
+    toggle_setting("keyboard_simulation")
+
+def toggle_prevent_sleep():
+    toggle_setting("prevent_sleep")
+
+def toggle_startup():
+    """Переключает автозагрузку и синхронизирует ярлык."""
+    current = settings.value("auto_startup", type=bool)
+    settings.setValue("auto_startup", not current)
+    sync_startup_shortcut()
+
+# ---------- Установка интервала  ----------
 def set_interval(seconds):
     settings.setValue("interval", seconds)
 
@@ -231,116 +247,69 @@ def custom_interval():
     if dialog_manager.done and dialog_manager.seconds is not None:
         set_interval(dialog_manager.seconds)
 
-# ---------- Функции переключения ----------
-def toggle_move_enabled():
-    """Включает/выключает перемещение курсора и управляет событием move_event."""
-    global move_event
-    current = settings.value("move_enabled", type=bool)
-    new_state = not current
-    settings.setValue("move_enabled", new_state)
-    if new_state:
-        move_event.set()    # разрешаем движение
-    else:
-        move_event.clear()  # запрещаем движение (поток будет ждать)
-
-def toggle_auto_update():
-    current = settings.value("auto_update_check", type=bool)
-    settings.setValue("auto_update_check", not current)
-
-def toggle_visual_move():
-    current = settings.value("visual_move", type=bool)
-    settings.setValue("visual_move", not current)
-
-# ---------- Движение мыши ----------
-def move_mouse_randomly():
-
-    # Для максимальной скорости движения мыши отключаем внутреннюю паузу pyautogui и fail-safe
-    pyautogui.PAUSE = 0
-    pyautogui.FAILSAFE = False
-
-    global running, move_event
+# ---------- Перемещение курсора ----------
+def cursor_movement():
+    """Передвижение курсора."""
     directions = [(-5,-5), (-5,0), (-5,5), (0,-5), (0,5), (5,-5), (5,0), (5,5)]
+    dx, dy = random.choice(directions)
+    mouse.move(dx, dy)
+    # Визуальный сдвиг: если выключен, возвращаем курсор; иначе оставляем на новом месте
+    if not settings.value("visual_move", type=bool):
+        mouse.move(-dx, -dy) # мгновенный возврат на исходную позицию
+
+# ---------- Эмуляция нажатия клавиши Ctrl через pynput ----------
+def simulate_key_press():
+    """Отправляет нажатие и отпускание клавиши Ctrl."""
+    keyboard.press(Key.ctrl)
+    keyboard.release(Key.ctrl)
+
+# ---------- Основной рабочий поток ----------
+def run():
+    global running
+
+    last_action_time = 0         # Внутренний таймер последнего действия программы
+    was_locked = False           # Триггер первого входа в блокировку
+
     while running:
-        # Регулярно актуализируем состояние предотвращения сна (раз в секунду)
-        manage_sleep_state()
 
-        # Ждём, пока перемещение не будет включено
-        # move_event.wait() блокирует поток, но мы периодически просыпаемся,
-        # чтобы проверить флаг running и состояние сна (раз в секунду)
-        while not move_event.wait(timeout=1):
-            if not running:
-                return
-            manage_sleep_state()   # проверка при каждом пробуждении
+        locked = is_workstation_locked() # Проверка блокировки и управление сном
 
-        # Если мы здесь, перемещение разрешено (move_event установлен)
+        if locked:
+            if not was_locked:
+                set_sleep_state(False) # при входе в блокировку – отключаем предотвращение сна
+
+        was_locked = locked
+
         current_interval = settings.value("interval", type=int)
-        # Сбрасываем счетчик и запоминаем текущую позицию перед началом отсчёта интервала
-        slept = 0
-        last_pos = pyautogui.position()
+        now = time.time()
 
-        # Ожидание с проверкой блокировки, смены интервала и активности пользователя
-        while slept < current_interval:
-            if not running:
-                return
-            # Если перемещение внезапно отключили – выходим во внешний цикл, где будем ждать событие
-            if not settings.value("move_enabled", type=bool):
-                break
-            # Если интервал изменился во время ожидания – пересчитываем
-            if settings.value("interval", type=int) != current_interval:
-                break
+        # Проверяем, пора ли выполнять действия (внутренний интервал + бездействие пользователя)
+        if now - last_action_time >= current_interval and get_idle_time() >= current_interval:
+            if not locked:
+                if settings.value("move_enabled", type=bool):
+                    cursor_movement()
+                if settings.value("keyboard_simulation", type=bool):
+                    simulate_key_press()
+                if settings.value("prevent_sleep", type=bool):
+                    set_sleep_state(True)
 
-            # При блокировке ПК только спим (без движения), но быстрее реагируем
-            if is_workstation_locked():
-                time.sleep(1)
-                manage_sleep_state()  # сразу же обновляем сон, т.к. блокировка могла измениться
-                slept += 1
-                continue
+                last_action_time = now
 
-            # Обычный отсчёт: спим по 1 секунде
-            time.sleep(1)
-            manage_sleep_state()   # проверяем блокировку после сна
-
-            # Проверяем, двигал ли пользователь мышь (или что-то ещё) во время ожидания
-            cur_pos = pyautogui.position()
-            if cur_pos != last_pos:
-                # Было перемещение – сбрасываем таймер и запоминаем новую позицию
-                slept = 0
-                last_pos = cur_pos
-            else:
-                slept += 1
-
-        if not running:
-            return
-
-        # Проверяем, что перемещение всё ещё включено и интервал не изменился
-        if not settings.value("move_enabled", type=bool) or settings.value("interval", type=int) != current_interval:
-            continue
-
-        # Если система не заблокирована, выполняем движение
-        if not is_workstation_locked():
-            dx, dy = random.choice(directions)
-
-            pyautogui.move(dx, dy)      # сдвиг на 1 пиксель
-
-            # Визуальный сдвиг: если выключен, возвращаем курсор; иначе оставляем на новом месте
-            if not settings.value("visual_move", type=bool):
-                pyautogui.move(-dx, -dy)    # мгновенный возврат на исходную позицию
+        time.sleep(1)   # небольшая пауза
 
 # ---------- Трей ----------
 def stop_program(icon_obj):
     global running, dialog_manager
     running = False
-    move_event.set()                # на всякий случай, чтобы поток не завис в wait()
-    icon_obj.stop()                  # останавливаем pystray
-    dialog_manager.quit_app.emit()  # сигналим Qt о завершении
-    # При выходе сбрасываем состояние сна (возвращаем стандартное поведение)
-    set_sleep_state(False)
+    icon_obj.stop()               # останавливаем pystray
+    dialog_manager.quit_app.emit()# сигналим Qt о завершении
+    set_sleep_state(False)        # сбрасываем предотвращение сна
 
 def create_tray_icon():
     # Используем resource_path для загрузки иконки
     image = Image.open(resource_path('icon.ico'))
 
-    # Вспомогательные лямбды для enabled/disabled
+    # Вспомогательная лямбда для пунктов, зависящих от move_enabled
     def move_on():
         return settings.value("move_enabled", type=bool)
 
@@ -350,28 +319,27 @@ def create_tray_icon():
                          toggle_move_enabled,
                          checked=lambda item: move_on()),
 
-        pystray.MenuItem('Интервал', pystray.Menu(
-            pystray.MenuItem('3 мин', lambda: set_interval(180),
-                             checked=lambda item: settings.value("interval", type=int) == 180,
-                             enabled=lambda item: move_on()),
-            pystray.MenuItem('5 мин', lambda: set_interval(300),
-                             checked=lambda item: settings.value("interval", type=int) == 300,
-                             enabled=lambda item: move_on()),
-            pystray.MenuItem('10 мин', lambda: set_interval(600),
-                             checked=lambda item: settings.value("interval", type=int) == 600,
-                             enabled=lambda item: move_on()),
-            pystray.MenuItem('15 мин', lambda: set_interval(900),
-                             checked=lambda item: settings.value("interval", type=int) == 900,
-                             enabled=lambda item: move_on()),
-            pystray.MenuItem('Свой...', custom_interval,
-                             checked=lambda item: settings.value("interval", type=int) not in (180, 300, 600, 900),
-                             enabled=lambda item: move_on()),
-        ), enabled=lambda item: move_on()),
-
         pystray.MenuItem('Визуальный сдвиг',
                          toggle_visual_move,
                          checked=lambda item: settings.value("visual_move", type=bool),
                          enabled=lambda item: move_on()),
+
+        pystray.MenuItem('Имитация клавиши (Ctrl)',
+                         toggle_keyboard_simulation,
+                         checked=lambda item: settings.value("keyboard_simulation", type=bool)),
+
+        pystray.MenuItem('Интервал', pystray.Menu(
+            pystray.MenuItem('3 мин', lambda: set_interval(180),
+                             checked=lambda item: settings.value("interval", type=int) == 180),
+            pystray.MenuItem('5 мин', lambda: set_interval(300),
+                             checked=lambda item: settings.value("interval", type=int) == 300),
+            pystray.MenuItem('10 мин', lambda: set_interval(600),
+                             checked=lambda item: settings.value("interval", type=int) == 600),
+            pystray.MenuItem('15 мин', lambda: set_interval(900),
+                             checked=lambda item: settings.value("interval", type=int) == 900),
+            pystray.MenuItem('Свой...', custom_interval,
+                             checked=lambda item: settings.value("interval", type=int) not in (180, 300, 600, 900)),
+        )),
 
         pystray.Menu.SEPARATOR,
 
@@ -402,19 +370,17 @@ def create_tray_icon():
 def restart_program(new_exe):
     """Вызывается из updater, когда всё готово к перезапуску."""
     global pending_update, new_executable
-
     pending_update = True
     new_executable = new_exe
     stop_program(icon)
 
 # ---------- Запуск ----------
 if __name__ == "__main__":
-
     app = QApplication(sys.argv)
-    app.setApplicationName(f"{title} {ver}")          # название приложения в системе
+    app.setApplicationName(f"{title} {ver}")
     app.setQuitOnLastWindowClosed(False)
 
-    # Иконка приложения через ресурс
+    # Иконка приложения через ресурс (для exe файла)
     icon_path = resource_path('icon.ico')
 
     # Проверка на повторный запуск (используем локальный мьютекс)
@@ -428,8 +394,7 @@ if __name__ == "__main__":
         msg.setIcon(QMessageBox.Icon.Warning)
         if os.path.exists(icon_path):
             msg.setWindowIcon(QIcon(icon_path))
-        # Автозакрытие через 4 секунды
-        QTimer.singleShot(4000, msg.close)
+        QTimer.singleShot(4000, msg.close) # Автозакрытие через 4 секунды
         msg.setWindowFlags(msg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         msg.exec()
         win32api.CloseHandle(mutex)
@@ -452,28 +417,20 @@ if __name__ == "__main__":
     # Подключаем сигнал завершения к выходу из Qt
     dialog_manager.quit_app.connect(app.quit, Qt.ConnectionType.QueuedConnection)
 
-    mover_thread = threading.Thread(target=move_mouse_randomly, daemon=True)
-    mover_thread.start()
+    run_thread = threading.Thread(target=run, daemon=True)
+    run_thread.start()
 
     icon = create_tray_icon()
-    # Запускаем трей в отдельном потоке
-    tray_thread = threading.Thread(target=icon.run, daemon=False)
+
+    tray_thread = threading.Thread(target=icon.run, daemon=False) # Запускаем трей в отдельном потоке
     tray_thread.start()
 
-    # Синхронизируем ярлык автозагрузки согласно настройке (с учётом .exe)
-    sync_startup_shortcut()
+    sync_startup_shortcut() # Синхронизируем ярлык автозагрузки согласно настройке (с учётом .exe)
+    cleanup_old_backup() # Удаляем старый .old файл, оставшийся от предыдущего обновления
 
-    # Удаляем старый .old файл, оставшийся от предыдущего обновления
-    cleanup_old_backup()
-
-    # Запускаем главный цикл Qt (блокирует, пока не придёт сигнал quit)
     app.exec()
 
-    # Запускаем новую версию, если было обновление
-    if pending_update and new_executable:
-        # Используем os.startfile для независимого запуска (не оставляет связей с текущим процессом)
-        print(new_executable)
-        os.startfile(new_executable)
+    if pending_update and new_executable: # Запускаем новую версию, если было обновление
+        os.startfile(new_executable) # Используем os.startfile для независимого запуска (не оставляет связей с текущим процессом)
 
-    # Освобождаем мьютекс
-    win32api.CloseHandle(mutex)
+    win32api.CloseHandle(mutex) # Освобождаем мьютекс

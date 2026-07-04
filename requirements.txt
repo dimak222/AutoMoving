@@ -1,4 +1,4 @@
-pyautogui
+pynput
 pystray
 pillow
 PyQt6
