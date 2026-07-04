@@ -189,7 +189,8 @@ jobs:
           python-version: '3.13'
 
       - name: Install dependencies
-        run: |
+        shell: bash  
+      run: |
           python -m pip install --upgrade pip
           # Устанавливаем PyInstaller первым, чтобы узнать его версию Pillow
           pip install pyinstaller
