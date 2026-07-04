@@ -18,6 +18,7 @@ jobs:
       contents: write                # необходимо для push тегов и релизов
     env:
       PROJECT_NAME: ${{ github.event.repository.name }}  # имя репозитория
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # убирает все предупреждения Node 20
     steps:
    
       - name: Git config (long paths + symlinks)
@@ -30,8 +31,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-        env:
-          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true   # убирает предупреждение Node 20
 
       # Определяем имя проекта (из названия репозитория) и главный скрипт
       - name: Determine main script
@@ -86,7 +85,6 @@ jobs:
         run: |
           TAG="${{ env.MANUAL_VERSION }}"
           echo "Используемый тег: $TAG"
-
 
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -161,6 +159,29 @@ jobs:
               Write-Error "Не удалось извлечь версию из тега $tag"
               exit 1
           }
+          
+      # Извлечение описания релиза
+      - name: Generate release notes from commits
+        shell: bash
+        run: |
+          TAG="${{ env.RECREATED_TAG }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ github.ref_name }}"
+          fi
+          PREV_TAG=$(git describe --tags --abbrev=0 "$TAG"^ 2>/dev/null || true)
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --format='%s' "$TAG")
+          else
+            COMMITS=$(git log --format='%s' "$PREV_TAG..$TAG")
+          fi
+
+          # Убираем ведущие номера вида "1. ", "2. " и т.п., затем нумеруем заново
+          CLEAN=$(echo "$COMMITS" | sed 's/^[0-9]\+\. //')
+          NUMBERED=$(echo "$CLEAN" | awk 'NF {print NR ". " $0}')
+
+          echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
+          echo "$NUMBERED" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -170,8 +191,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Устанавливаем PyInstaller первым, чтобы узнать его версию Pillow
           pip install pyinstaller
+          # Извлекаем версию Pillow, с которой собран PyInstaller
+          PILLOW_VERSION=$(python -c "import PIL; print(PIL.__version__)")
+          echo "Using Pillow version: $PILLOW_VERSION"
+          # Устанавливаем Pillow точно такой же версии
+          pip install Pillow==$PILLOW_VERSION
+          # Теперь остальные зависимости из requirements.txt
+          pip install -r requirements.txt
 
       - name: Build EXE with PyInstaller
         run: |
@@ -184,6 +212,7 @@ jobs:
         with:
           files: dist/${{ env.PROJECT_NAME }}.exe
           name: ${{ env.PROJECT_NAME }} ${{ github.ref_name }}
+          body: ${{ env.RELEASE_BODY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -195,5 +224,6 @@ jobs:
           files: dist/${{ env.PROJECT_NAME }}.exe
           tag_name: ${{ env.RECREATED_TAG }}
           name: ${{ env.PROJECT_NAME }} ${{ env.RECREATED_TAG }}
+          body: ${{ env.RELEASE_BODY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
