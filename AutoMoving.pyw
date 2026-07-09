@@ -7,7 +7,7 @@
 #-------------------------------------------------------------------------------
 
 title = "AutoMoving"
-ver = "v26.07.0"
+ver = "v26.07.1"
 
 #------------------------------Импорт модулей-----------------------------------
 
@@ -48,6 +48,7 @@ def resource_path(relative_path):
 def cleanup_old_backup():
     """Удаляет предыдущий .old файл, оставшийся после обновления."""
     old_path = sys.argv[0] + ".old"
+
     if not os.path.exists(old_path):
         return
     try:
@@ -57,6 +58,23 @@ def cleanup_old_backup():
             os.remove(old_path)
     except Exception:
         pass
+
+# ---------- Очистка временного _new.exe после неудачного обновления ----------
+def cleanup_new_exe():
+    """Удаляет временный _new.exe файл, оставшийся после неудачного обновления."""
+    if not is_exe():
+        return
+    current_exe = sys.argv[0]
+    dir_name = os.path.dirname(current_exe)
+    new_exe_path = os.path.join(dir_name, f"{title}_new.exe")
+    if os.path.exists(new_exe_path):
+        try:
+            if send2trash:
+                send2trash.send2trash(new_exe_path)
+            else:
+                os.remove(new_exe_path)
+        except Exception:
+            pass
 
 # ---------- Настройки через QSettings ----------
 settings = QSettings("AutoMoving", "AutoMoving")
@@ -374,6 +392,18 @@ def restart_program(new_exe):
     new_executable = new_exe
     stop_program(icon)
 
+def create_update_bat(new_exe_path):
+    """Создаёт bat-файл в TEMP, который запустит новую версию после выхода из текущей."""
+    import tempfile
+    bat_path = os.path.join(tempfile.gettempdir(), f"{title}_update.bat")
+    with open(bat_path, "w") as f:
+        f.write(f"""@echo off
+timeout /t 2 /nobreak >nul
+start "" "{new_exe_path}"
+del "%~f0" & exit
+""")
+    return bat_path
+
 # ---------- Запуск ----------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -427,10 +457,12 @@ if __name__ == "__main__":
 
     sync_startup_shortcut() # Синхронизируем ярлык автозагрузки согласно настройке (с учётом .exe)
     cleanup_old_backup() # Удаляем старый .old файл, оставшийся от предыдущего обновления
+    cleanup_new_exe()       # Удаляем временный _new.exe, если остался после сбоя
 
     app.exec()
 
-    if pending_update and new_executable: # Запускаем новую версию, если было обновление
-        os.startfile(new_executable) # Используем os.startfile для независимого запуска (не оставляет связей с текущим процессом)
-
     win32api.CloseHandle(mutex) # Освобождаем мьютекс
+
+    if pending_update and new_executable: # Запускаем новую версию, если было обновление
+        bat = create_update_bat(new_executable)
+        os.startfile(bat) # Используем os.startfile для независимого запуска (не оставляет связей с текущим процессом)

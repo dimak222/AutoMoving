@@ -118,7 +118,7 @@ class UpdateChecker:
         if not exe_asset:
             self.log("Ошибка: EXE-файл не найден в релизе.")
             err_msg = QMessageBox(parent)
-            err_msg.setWindowTitle("Ошибка")
+            err_msg.setWindowTitle(f"{self.title} {self.current}")
             err_msg.setText("Не найден исполняемый файл в релизе.")
             err_msg.setIcon(QMessageBox.Icon.Warning)
             if parent is None:
@@ -228,7 +228,7 @@ class UpdateChecker:
 
                 # Предупреждение автоматически закроется через 5 секунд
                 warn = QMessageBox(dlg)
-                warn.setWindowTitle("Превышено время ожидания")
+                warn.setWindowTitle(f"{self.title} {self.current}")
                 warn.setText("Не удалось начать загрузку в течение 10 секунд.")
                 warn.setIcon(QMessageBox.Icon.Warning)
                 warn.setStandardButtons(QMessageBox.StandardButton.Ok)
