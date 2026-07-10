@@ -58,14 +58,11 @@ jobs:
         id: manual_ver
         shell: bash
         run: |
-          # Пытаемся найти последний тег по дате создания (committerdate)
           LAST_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:strip=2)' refs/tags | grep -E '^v' | head -n 1)
-
           if [ -n "$LAST_TAG" ]; then
             echo "Найден последний тег: $LAST_TAG"
             echo "MANUAL_VERSION=$LAST_TAG" >> $GITHUB_ENV
           else
-            # Если тегов нет, используем значение из input
             INPUT_VERSION="${{ github.event.inputs.version }}"
             if [ -n "$INPUT_VERSION" ]; then
               echo "Используем версию из поля ввода: $INPUT_VERSION"
@@ -85,87 +82,23 @@ jobs:
         run: |
           TAG="${{ env.MANUAL_VERSION }}"
           echo "Используемый тег: $TAG"
-
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
           git tag -d "$TAG" 2>/dev/null || true
           git push origin ":refs/tags/$TAG" 2>/dev/null || true
-
           git tag "$TAG"
           git push origin "$TAG"
-
           git fetch --tags
           git checkout "$TAG"
-
           echo "RECREATED_TAG=$TAG" >> $GITHUB_ENV
 
-      # Генерация version info
-      - name: Generate version info file
-        shell: powershell
-        run: |
-          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-              "${{ env.MANUAL_VERSION }}"
-          } else {
-              "${{ github.ref_name }}"
-          }
-          Write-Host "Using tag: $tag"
-          $project = "${{ env.PROJECT_NAME }}"
-          $ver = $tag -replace '^v', ''
-          if ($ver -match '^(\d+\.\d+\.\d+)') {
-              $base = $matches[1]
-              $parts = $base.Split('.')
-              $major = [int]$parts[0]
-              $minor = [int]$parts[1]
-              $patch = [int]$parts[2]
-              $suffix = $ver.Substring($base.Length)
-              $build = 0
-              if ($suffix -match 'b(\d+)') { $build = [int]$matches[1] }
-
-              $lines = @(
-                  "# UTF-8",
-                  "VSVersionInfo(",
-                  "  ffi=FixedFileInfo(",
-                  "    filevers=($major, $minor, $patch, $build),",
-                  "    mask=0x3f,",
-                  "    flags=0x0,",
-                  "    OS=0x4,",
-                  "    fileType=0x1,",
-                  "    subtype=0x0,",
-                  "    date=(0, 0)",
-                  "  ),",
-                  "  kids=[",
-                  "    StringFileInfo(",
-                  "      [",
-                  "        StringTable(",
-                  "          u'040904B0',",
-                  "          [",
-                  "            StringStruct(u'FileDescription', u'$project'),",
-                  "            StringStruct(u'InternalName', u'$project'),",
-                  "            StringStruct(u'ProductVersion', u'$tag'),",
-                  "            StringStruct(u'ProductName', u'$project'),",
-                  "            StringStruct(u'LegalCopyright', u'(c) dimak222')",
-                  "          ]",
-                  "        )",
-                  "      ]",
-                  "    ),",
-                  "    VarFileInfo([VarStruct(u'Translation', [1049, 1033])])",
-                  "  ]",
-                  ")"
-              )
-              $content = $lines -join "`r`n"
-              Set-Content -Path version_info.txt -Value $content -Encoding UTF8
-          } else {
-              Write-Error "Не удалось извлечь версию из тега $tag"
-              exit 1
-          }
-          
-      # Извлечение описания релиза
+      # Генерация release notes (общая для push и manual)
       - name: Generate release notes from commits
         shell: bash
         run: |
-          TAG="${{ env.RECREATED_TAG }}"
-          if [ -z "$TAG" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ env.RECREATED_TAG }}"
+          else
             TAG="${{ github.ref_name }}"
           fi
           # Получаем предыдущий тег (не текущий)
