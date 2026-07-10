@@ -7,7 +7,7 @@
 #-------------------------------------------------------------------------------
 
 title = "AutoMoving"
-ver = "v26.07.1"
+ver = "v26.07.2"
 
 #------------------------------Импорт модулей-----------------------------------
 
@@ -17,6 +17,7 @@ import time
 import sys
 import os
 import ctypes
+import subprocess
 from pynput.mouse import Controller as MouseController
 from pynput.keyboard import Key, Controller as KeyboardController
 from PIL import Image
@@ -292,9 +293,8 @@ def run():
 
         locked = is_workstation_locked() # Проверка блокировки и управление сном
 
-        if locked:
-            if not was_locked:
-                set_sleep_state(False) # при входе в блокировку – отключаем предотвращение сна
+        if locked and not was_locked:
+            set_sleep_state(False) # при входе в блокировку – отключаем предотвращение сна
 
         was_locked = locked
 
@@ -392,17 +392,43 @@ def restart_program(new_exe):
     new_executable = new_exe
     stop_program(icon)
 
-def create_update_bat(new_exe_path):
-    """Создаёт bat-файл в TEMP, который запустит новую версию после выхода из текущей."""
-    import tempfile
-    bat_path = os.path.join(tempfile.gettempdir(), f"{title}_update.bat")
-    with open(bat_path, "w") as f:
-        f.write(f"""@echo off
-timeout /t 2 /nobreak >nul
-start "" "{new_exe_path}"
-del "%~f0" & exit
-""")
-    return bat_path
+# ---------- Функция запуска новой версии после обновления ----------
+def launch_new_version(exe_path):
+    """Запускает переданный EXE-файл с очищенным окружением (без _MEI путей)."""
+    env = {}
+    for key in ('SYSTEMROOT', 'SYSTEMDRIVE', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOMEDRIVE', 'HOMEPATH', 'PROGRAMDATA'):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    path = os.environ.get('PATH', '')
+    clean_path = [p for p in path.split(os.pathsep) if '_MEI' not in p]
+    env['PATH'] = os.pathsep.join(clean_path)
+
+    subprocess.Popen(
+        [exe_path],
+        env=env,
+        creationflags=subprocess.DETACHED_PROCESS,
+        close_fds=True
+    )
+
+# ---------- Показ сообщения (с настраиваемым текстом) ----------
+def show_already_running_message(text="Ошибка!", timeout=4, parent=None):
+
+    """
+    Показывает модальное окно с предупреждением.
+    text – произвольный текст сообщения.
+    Если timeout > 0, окно автоматически закроется через указанное число секунд.
+    parent – родительский виджет (можно None).
+    """
+    msg = QMessageBox(parent)
+    msg.setWindowTitle(f"{title} {ver}")
+    msg.setText(text)
+    msg.setIcon(QMessageBox.Icon.Warning)
+    if os.path.exists(icon_path):
+        msg.setWindowIcon(QIcon(icon_path))
+    if timeout > 0:
+        QTimer.singleShot(timeout * 1000, msg.close)
+    msg.setWindowFlags(msg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+    msg.exec()
 
 # ---------- Запуск ----------
 if __name__ == "__main__":
@@ -418,17 +444,9 @@ if __name__ == "__main__":
     mutex = win32event.CreateMutex(None, False, mutex_name)
     last_error = win32api.GetLastError()
     if last_error == winerror.ERROR_ALREADY_EXISTS:
-        msg = QMessageBox()
-        msg.setWindowTitle(f"{title} {ver}")
-        msg.setText("Приложение уже запущено!")
-        msg.setIcon(QMessageBox.Icon.Warning)
-        if os.path.exists(icon_path):
-            msg.setWindowIcon(QIcon(icon_path))
-        QTimer.singleShot(4000, msg.close) # Автозакрытие через 4 секунды
-        msg.setWindowFlags(msg.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        msg.exec()
+        show_already_running_message("Приложение уже запущено!", 4)
         win32api.CloseHandle(mutex)
-        sys.exit(0)
+        sys.exit()
 
     # Автоматическая проверка обновлений при старте, только если включена в настройках
     if settings.value("auto_update_check", type=bool):
@@ -456,13 +474,12 @@ if __name__ == "__main__":
     tray_thread.start()
 
     sync_startup_shortcut() # Синхронизируем ярлык автозагрузки согласно настройке (с учётом .exe)
-    cleanup_old_backup() # Удаляем старый .old файл, оставшийся от предыдущего обновления
+    cleanup_old_backup()    # Удаляем старый .old файл, оставшийся от предыдущего обновления
     cleanup_new_exe()       # Удаляем временный _new.exe, если остался после сбоя
 
     app.exec()
 
     win32api.CloseHandle(mutex) # Освобождаем мьютекс
 
-    if pending_update and new_executable: # Запускаем новую версию, если было обновление
-        bat = create_update_bat(new_executable)
-        os.startfile(bat) # Используем os.startfile для независимого запуска (не оставляет связей с текущим процессом)
+    if pending_update and new_executable:
+        launch_new_version(new_executable)

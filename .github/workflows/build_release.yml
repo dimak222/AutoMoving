@@ -168,17 +168,18 @@ jobs:
           if [ -z "$TAG" ]; then
             TAG="${{ github.ref_name }}"
           fi
-          PREV_TAG=$(git describe --tags --abbrev=0 "$TAG"^ 2>/dev/null || true)
+          # Получаем предыдущий тег (не текущий)
+          PREV_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:strip=2)' refs/tags | grep -E '^v' | grep -v "^$TAG$" | head -n 1)
           if [ -z "$PREV_TAG" ]; then
             COMMITS=$(git log --format='%s' "$TAG")
           else
             COMMITS=$(git log --format='%s' "$PREV_TAG..$TAG")
           fi
-
-          # Убираем ведущие номера вида "1. ", "2. " и т.п., затем нумеруем заново
+          # Удаляем строки, которые являются именами тегов (например, "v26.07.1")
+          COMMITS=$(echo "$COMMITS" | grep -vE '^v[0-9]+\.[0-9]+\.[0-9]+')
+          # Убираем ведущие номера и пробелы, перенумеровываем заново
           CLEAN=$(echo "$COMMITS" | sed 's/^[0-9]\+\. //')
           NUMBERED=$(echo "$CLEAN" | awk 'NF {print NR ". " $0}')
-
           echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
           echo "$NUMBERED" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
