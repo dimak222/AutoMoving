@@ -166,7 +166,6 @@ jobs:
             echo "Error: TAG is empty. Cannot generate release notes."
             exit 1
           fi
-          # Получаем предыдущий тег (не текущий)
           PREV_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:strip=2)' refs/tags | grep -E '^v' | grep -v "^$TAG$" | head -n 1)
           echo "Previous tag: '$PREV_TAG'"
           if [ -z "$PREV_TAG" ]; then
@@ -174,13 +173,19 @@ jobs:
           else
             COMMITS=$(git log --format='%s' "$PREV_TAG..$TAG" || echo "")
           fi
-          # Удаляем строки, которые являются именами тегов (например, "v26.07.1")
-          COMMITS=$(echo "$COMMITS" | grep -vE '^v[0-9]+\.[0-9]+\.[0-9]+' || true)
+          # Удаляем строки, которые являются именами тегов (начинаются с 'v' и цифр)
+          COMMITS=$(echo "$COMMITS" | grep -vE '^v[0-9]+' || true)
           # Убираем ведущие номера и пробелы, перенумеровываем заново
           CLEAN=$(echo "$COMMITS" | sed 's/^[0-9]\+\. //' || true)
           NUMBERED=$(echo "$CLEAN" | awk 'NF {print NR ". " $0}' || true)
+          # Оборачиваем в HTML с шрифтом Segoe UI 12pt (если есть что оборачивать)
+          if [ -n "$NUMBERED" ]; then
+            BODY="<div style=\"font-family: 'Segoe UI'; font-size: 12pt;\">${NUMBERED}</div>"
+          else
+            BODY=""
+          fi
           echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
-          echo "$NUMBERED" >> $GITHUB_ENV
+          echo "$BODY" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
       - name: Set up Python
