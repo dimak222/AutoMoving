@@ -161,18 +161,24 @@ jobs:
           else
             TAG="${{ github.ref_name }}"
           fi
+          echo "Using TAG: '$TAG'"
+          if [ -z "$TAG" ]; then
+            echo "Error: TAG is empty. Cannot generate release notes."
+            exit 1
+          fi
           # Получаем предыдущий тег (не текущий)
           PREV_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:strip=2)' refs/tags | grep -E '^v' | grep -v "^$TAG$" | head -n 1)
+          echo "Previous tag: '$PREV_TAG'"
           if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --format='%s' "$TAG")
+            COMMITS=$(git log --format='%s' "$TAG" || echo "")
           else
-            COMMITS=$(git log --format='%s' "$PREV_TAG..$TAG")
+            COMMITS=$(git log --format='%s' "$PREV_TAG..$TAG" || echo "")
           fi
           # Удаляем строки, которые являются именами тегов (например, "v26.07.1")
-          COMMITS=$(echo "$COMMITS" | grep -vE '^v[0-9]+\.[0-9]+\.[0-9]+')
+          COMMITS=$(echo "$COMMITS" | grep -vE '^v[0-9]+\.[0-9]+\.[0-9]+' || true)
           # Убираем ведущие номера и пробелы, перенумеровываем заново
-          CLEAN=$(echo "$COMMITS" | sed 's/^[0-9]\+\. //')
-          NUMBERED=$(echo "$CLEAN" | awk 'NF {print NR ". " $0}')
+          CLEAN=$(echo "$COMMITS" | sed 's/^[0-9]\+\. //' || true)
+          NUMBERED=$(echo "$CLEAN" | awk 'NF {print NR ". " $0}' || true)
           echo "RELEASE_BODY<<EOF" >> $GITHUB_ENV
           echo "$NUMBERED" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
