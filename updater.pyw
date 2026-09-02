@@ -302,6 +302,7 @@ class UpdateCheckThread(QThread):
             if updater.check():
                 self.update_available.emit(updater)
         except Exception:
+            print("Ошибка проверки обновлений.")
             pass
 
 
@@ -314,6 +315,7 @@ def start_update_check(app_title, app_ver, parent_widget, log_callback=None, on_
     on_restart(new_exe_path) – вызывается, когда всё готово, с путём к новому исполняемому файлу.
     """
     # Оборачиваем переданный колбэк, чтобы гарантированно вызывать с одним аргументом
+
     def safe_log(msg):
         if log_callback is None:
             return
@@ -325,8 +327,6 @@ def start_update_check(app_title, app_ver, parent_widget, log_callback=None, on_
             except TypeError:
                 log_callback(msg, False, True)
 
-    thread = UpdateCheckThread(app_ver, app_title, log_func=safe_log)
-
     def on_available(updater):
         try:
             if updater.show_update_dialog(app_title, app_ver, parent=parent_widget):
@@ -334,8 +334,12 @@ def start_update_check(app_title, app_ver, parent_widget, log_callback=None, on_
             else:
                 safe_log("Обновление отменено пользователем.")
         except Exception:
+            safe_log("Ошибка отображения окна диалога.")
             pass
+
+    thread = UpdateCheckThread(app_ver, app_title, log_func=safe_log)
 
     thread.update_available.connect(on_available)
     thread.start()
+
     return thread

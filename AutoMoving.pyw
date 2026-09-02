@@ -7,7 +7,7 @@
 #-------------------------------------------------------------------------------
 
 title = "AutoMoving"
-ver = "v26.07.2"
+ver = "v26.09.0"
 
 #------------------------------Импорт модулей-----------------------------------
 
@@ -113,6 +113,9 @@ keyboard = KeyboardController()
 # Для обновления
 pending_update = False
 new_executable = None
+
+# Таймер для определения двойного клика
+last_tray_click_time = 0.0
 
 # ---------- Определение времени последнего ввода пользователя ----------
 class LASTINPUTINFO(ctypes.Structure):
@@ -249,6 +252,28 @@ def toggle_startup():
     settings.setValue("auto_startup", not current)
     sync_startup_shortcut()
 
+# ---------- Открытие страницы проекта (GitHub) через os.startfile ----------
+def open_project_page():
+    """Открывает страницу проекта в системном браузере по умолчанию."""
+    try:
+        os.startfile(f"https://github.com/dimak222/{title}")
+    except Exception as e:
+        # Если не удалось открыть, показываем сообщение об ошибке
+        show_already_running_message(f"Не удалось открыть страницу: {e}")
+
+# ---------- Обработчики двойного клика ----------
+def on_tray_click(icon, item):
+    """Обрабатывает клик по иконке в трее. Двойной клик открывает страницу проекта."""
+    global last_tray_click_time
+    now = time.time()
+    if now - last_tray_click_time < 0.5:
+        # Двойной клик
+        last_tray_click_time = 0.0  # сброс, чтобы избежать ложных срабатываний
+        open_project_page()
+    else:
+        # Первый клик или одиночный
+        last_tray_click_time = now
+
 # ---------- Установка интервала  ----------
 def set_interval(seconds):
     settings.setValue("interval", seconds)
@@ -331,7 +356,19 @@ def create_tray_icon():
     def move_on():
         return settings.value("move_enabled", type=bool)
 
+    # Скрытый пункт меню, активируемый двойным кликом
+    default_menu_item = pystray.MenuItem(
+        'Открыть страницу проекта',
+        on_tray_click,
+
+        default=True,
+        visible=False
+    )
+
     menu = pystray.Menu(
+        # Скрытый пункт для двойного клика
+        default_menu_item,
+
         # Блок 1: Перемещение курсора
         pystray.MenuItem('Перемещение курсора',
                          toggle_move_enabled,
@@ -369,7 +406,7 @@ def create_tray_icon():
         pystray.Menu.SEPARATOR,
 
         # Блок 3: Обновления и автозагрузка
-        pystray.MenuItem('Проверять обновления при старте',
+        pystray.MenuItem('Проверять обновления',
                          toggle_auto_update,
                          checked=lambda item: settings.value("auto_update_check", type=bool)),
 
@@ -444,7 +481,7 @@ if __name__ == "__main__":
     mutex = win32event.CreateMutex(None, False, mutex_name)
     last_error = win32api.GetLastError()
     if last_error == winerror.ERROR_ALREADY_EXISTS:
-        show_already_running_message("Приложение уже запущено!", 4)
+        show_already_running_message("Приложение уже запущено!")
         win32api.CloseHandle(mutex)
         sys.exit()
 
